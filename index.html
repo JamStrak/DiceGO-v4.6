@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>绝境骰子 - V7.5 平衡与物理增强版</title>
+    <title>绝境骰子 - V7.6 终极爆破版</title>
     <style>
         body { margin: 0; padding: 0; background-color: #000; overflow: hidden; font-family: 'Segoe UI', sans-serif; user-select: none; -webkit-user-select: none; touch-action: none; color: white;}
         
@@ -57,7 +57,7 @@
 
     <div id="screen-start" class="overlay">
         <h1 style="font-size: 40px; color: #ffcc00; margin:0;">PROJECT<br>DICE SURVIVOR</h1>
-        <p style="color:#888; letter-spacing: 2px;">V7.5 平衡版</p>
+        <p style="color:#888; letter-spacing: 2px;">V7.6 终极爆破版</p>
         <p style="color:#fff;">历史最高: <span id="best-score">0</span></p>
         <button class="btn-start" onclick="gameStart()">DEPLOY</button>
     </div>
@@ -79,7 +79,7 @@
         MAP_SIZE: 2500,
         ZOOM: 0.6,
         PLAYER: { HP: 100, SPEED: 8, INV_TIME: 100 }, 
-        SPAWN: { START_DELAY: 1000, MIN_DELAY: 150 }, // 最小刷怪间隔稍微调大一点
+        SPAWN: { START_DELAY: 1000, MIN_DELAY: 150 },
         CAT: {
             PLAYER: 0x0001,
             ENEMY:  0x0002,
@@ -144,7 +144,7 @@
             gen('enemy', 0xff3333, 28, 28, 'rect');
             gen('enemy_s', 0x9933ff, 32, 32, 'tri');
             gen('enemy_e', 0xff8800, 96, 96, 'rect');
-            gen('bullet', 0xffaa00, 14, 14, 'circle'); // 子弹稍微大一点
+            gen('bullet', 0xffaa00, 14, 14, 'circle'); 
             gen('item_hp', 0x00ff00, 24, 24, 'rect');
             gen('item_xp', 0xffd700, 28, 28, 'circle');
             
@@ -219,11 +219,11 @@
                 diceCount: 1, size: 1.0, speed: 1.0, radius: 120, cooldown: 1000, 
                 friction: 0.05, impactDmg: 20, 
                 laserDmgMult: 1.0, freezeChance: 0.2, explodeDmgMult: 1.0,
-                densityMult: 1.0 // 新增：密度系数
+                densityMult: 1.0 
             };
             this.enemies = [];
             this.diceList = [];
-            this.bullets = []; // 管理子弹
+            this.bullets = []; 
             this.items = []; 
             this.lastHurtTime = 0;
             this.isPaused = false;
@@ -272,7 +272,7 @@
                         }
                     });
                     check(pair, 'player', 'bullet', (p, b) => { this.hitPlayer(5); b.destroy(); });
-                    check(pair, 'bullet', 'wall', (b, w) => { b.destroy(); }); // 子弹撞墙销毁
+                    check(pair, 'bullet', 'wall', (b, w) => { b.destroy(); });
                     
                     check(pair, 'player', 'item_hp', (p, item) => { 
                         this.healPlayer(30); 
@@ -450,11 +450,10 @@
                     type = 'enemy_s'; hp = 15; speed = 3;
                 }
 
-                // 2. 修改点：更平滑的血量成长
                 if (isElite) {
-                    hp = 200 * (1 + this.dataState.level * 0.25); // 精英成长依然较快
+                    hp = 200 * (1 + this.dataState.level * 0.25); 
                 } else {
-                    hp = hp * (1 + this.dataState.level * 0.1); // 普通怪成长减缓
+                    hp = hp * (1 + this.dataState.level * 0.1); 
                 }
 
                 const e = this.matter.add.sprite(x, y, type);
@@ -481,7 +480,6 @@
             b.name = 'bullet'; b.setSensor(true);
             b.setCollisionCategory(C.CAT.BULLET); b.setCollidesWith([C.CAT.PLAYER, C.CAT.WALL]);
             const a = Phaser.Math.Angle.Between(e.x, e.y, this.player.x, this.player.y);
-            // 1. 修改点：提高子弹速度，移除阻力
             b.setVelocity(Math.cos(a)*7, Math.sin(a)*7);
             b.setFrictionAir(0); 
             this.time.delayedCall(3500, ()=> { if(b.active) b.destroy(); });
@@ -523,7 +521,6 @@
                     d.setCollidesWith([C.CAT.ENEMY, C.CAT.WALL]);
                     d.setBounce(0.4); 
                     d.setFrictionAir(this.build.friction); 
-                    // 3. 修改点：应用密度系数
                     d.setDensity(20 * this.build.densityMult); 
 
                     const spd = 12 * this.build.speed;
@@ -543,14 +540,49 @@
             d.setTexture(`die_${d.finalPoint}`);
             
             const point = d.finalPoint;
-            const isCrit = point === 6;
-            const radius = this.build.radius * (isCrit ? 1.5 : 1);
-            const dmg = point * 10 * (isCrit ? 2 : 1) * this.build.explodeDmgMult; 
+            
+            // V7.6 核心改动：指数级半径 & 倍率伤害
+            // 半径映射: 1->0.5, 2->0.8, 3->1.2, 4->1.8, 5->2.5, 6->3.5 (巨型)
+            const radMap = [0.5, 0.8, 1.2, 1.8, 2.5, 3.5]; 
+            const radiusCoef = radMap[point-1];
+            const radius = this.build.radius * radiusCoef; 
 
-            this.showDmg(d.x, d.y - 25, point, isCrit ? '#ff0' : '#0ff', isCrit ? 40 : 24);
+            // 伤害公式：基础 * 点数
+            let dmg = this.build.impactDmg * point * this.build.explodeDmgMult;
+            
+            // 视觉分级
+            let color = 0xffffff;
+            let shake = 0.005;
+            if (point <= 2) { color = 0xdddddd; shake = 0.005; }
+            else if (point <= 4) { color = 0xffaa00; shake = 0.015; }
+            else if (point === 5) { color = 0xff0000; shake = 0.025; }
+            else { color = 0x00ffff; shake = 0.05; dmg *= 1.5; } // 6点额外伤害
 
-            const c = this.add.circle(d.x, d.y, 10, isCrit?0xffd700:0xffffff, 0.5);
-            this.tweens.add({targets:c, scale: radius/10, alpha:0, duration:200});
+            this.cameras.main.shake(200, shake);
+            this.showDmg(d.x, d.y - 25, point, point===6 ? '#0ff' : '#fff', point===6 ? 40 : 24);
+
+            // 强化版 VFX：双层圆圈
+            // 1. 冲击波环
+            const shockwave = this.add.graphics();
+            shockwave.lineStyle(point === 6 ? 10 : 4, color, 1);
+            shockwave.strokeCircle(d.x, d.y, 10);
+            this.tweens.add({
+                targets: shockwave,
+                scaleX: radius/10, scaleY: radius/10, // 放大到实际半径
+                alpha: 0,
+                duration: 300,
+                onUpdate: () => { 
+                    shockwave.clear(); 
+                    shockwave.lineStyle(point === 6 ? 10 : 4, color, shockwave.alpha);
+                    shockwave.strokeCircle(d.x, d.y, 10); 
+                },
+                onComplete: () => shockwave.destroy()
+            });
+
+            // 2. 核心闪光
+            const flash = this.add.circle(d.x, d.y, radius * 0.2, color, 0.8);
+            this.tweens.add({targets: flash, scale: 3, alpha: 0, duration: 250, onComplete:()=>flash.destroy()});
+
 
             if (point % 2 === 0) {
                 let nearest = null; let minD = 600; 
@@ -577,7 +609,7 @@
                 const dist = Phaser.Math.Distance.Between(d.x, d.y, e.x, e.y);
                 if(dist <= radius) {
                     const angle = Phaser.Math.Angle.Between(d.x, d.y, e.x, e.y);
-                    const force = 0.1 * this.build.size;
+                    const force = 0.1 * this.build.size * (point/3); // 爆炸推力也随点数增加
                     e.applyForce({x:Math.cos(angle)*force, y:Math.sin(angle)*force});
                     this.hitEnemy(e, dmg);
                     
@@ -680,7 +712,6 @@
                 {t:"多重投掷", desc:"骰子数量 +1", fn:()=>this.build.diceCount++},
                 {t:"爆破专家", desc:"爆炸伤害 +25%", fn:()=>this.build.explodeDmgMult += 0.25},
                 {t:"重型材质", desc:"撞击伤害 +15", fn:()=>this.build.impactDmg += 15},
-                // 3. 修改点：巨大化增加质量和撞击伤害
                 {t:"巨大化", desc:"体积+25% 撞击+20% 质量UP", fn:()=>{
                     this.build.size *= 1.25; 
                     this.build.impactDmg *= 1.2;
@@ -711,9 +742,7 @@
                     p.fn();
                     this.dataState.level++;
                     this.dataState.xp = 0;
-                    // 2. 修改点：升级曲线更平滑 (1.4 -> 1.25)
                     this.dataState.nextXp = Math.floor(this.dataState.nextXp * 1.25);
-                    // 2. 修改点：刷怪频率增长变慢 (50 -> 30)
                     const newDelay = Math.max(C.SPAWN.MIN_DELAY, C.SPAWN.START_DELAY - (this.dataState.level * 30));
                     this.spawnEvent.delay = newDelay;
                     document.getElementById('screen-levelup').style.display = 'none';
