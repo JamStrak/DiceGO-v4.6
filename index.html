@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>绝境骰子 - V7.3 破阵物理版</title>
+    <title>绝境骰子 - V7.4 战术爆破版</title>
     <style>
         body { margin: 0; padding: 0; background-color: #000; overflow: hidden; font-family: 'Segoe UI', sans-serif; user-select: none; -webkit-user-select: none; touch-action: none; color: white;}
         
@@ -57,7 +57,7 @@
 
     <div id="screen-start" class="overlay">
         <h1 style="font-size: 40px; color: #ffcc00; margin:0;">PROJECT<br>DICE SURVIVOR</h1>
-        <p style="color:#888; letter-spacing: 2px;">V7.3 破阵物理版</p>
+        <p style="color:#888; letter-spacing: 2px;">V7.4 战术爆破版</p>
         <p style="color:#fff;">历史最高: <span id="best-score">0</span></p>
         <button class="btn-start" onclick="gameStart()">DEPLOY</button>
     </div>
@@ -146,7 +146,8 @@
             gen('enemy_s', 0x9933ff, 32, 32, 'tri');
             gen('enemy_e', 0xff8800, 96, 96, 'rect');
             gen('bullet', 0xffaa00, 10, 10, 'circle');
-            gen('item', 0x00ff00, 24, 24, 'rect');
+            gen('item_hp', 0x00ff00, 24, 24, 'rect'); // 回血-绿
+            gen('item_xp', 0xffd700, 28, 28, 'circle'); // 经验-金
             
             const g = this.make.graphics({add:false});
             g.lineStyle(1, 0x333333); g.strokeRect(0,0,128,128);
@@ -157,7 +158,7 @@
 
         generateDiceTextures() {
             const size = 30;
-            const dotSize = 3.5; // 稍微缩小点数，避免边缘
+            const dotSize = 3.5;
             const positions = {
                 1: [[0.5, 0.5]],
                 2: [[0.25, 0.25], [0.75, 0.75]],
@@ -171,7 +172,7 @@
                 if (this.textures.exists(`die_${i}`)) continue;
                 const g = this.make.graphics({add: false});
                 g.fillStyle(0xffffff);
-                g.fillRoundedRect(0, 0, size, size, 5); // 圆角
+                g.fillRoundedRect(0, 0, size, size, 5);
                 g.lineStyle(2, 0x999999);
                 g.strokeRoundedRect(0, 0, size, size, 5);
                 g.fillStyle(0x000000);
@@ -217,11 +218,12 @@
             this.dataState = { level: 1, xp: 0, nextXp: 10, kills: 0, time: 0 };
             this.build = { 
                 diceCount: 1, size: 1.0, speed: 1.0, radius: 120, cooldown: 1000, 
-                friction: 0.05, impactDmg: 20, // 初始撞击伤害提高
-                laserDmgMult: 1.0, freezeChance: 0.2 
+                friction: 0.05, impactDmg: 20, 
+                laserDmgMult: 1.0, freezeChance: 0.2, explodeDmgMult: 1.0 // 新增：爆炸倍率
             };
             this.enemies = [];
             this.diceList = [];
+            this.items = []; // 管理掉落物
             this.lastHurtTime = 0;
             this.isPaused = false;
 
@@ -245,21 +247,49 @@
 
             this.matter.world.on('collisionstart', (event) => {
                 event.pairs.forEach(pair => {
-                    // 撞击伤害逻辑
                     check(pair, 'die', 'enemy', (die, enemy) => {
-                        // 只要有速度就造成伤害
-                        if (die.body.speed > 0.5) {
-                            const dmg = this.build.impactDmg;
-                            this.showDmg(enemy.x, enemy.y, dmg, '#fff'); // 白色数字表示撞击
-                            this.hitEnemy(enemy, dmg);
-                            
-                            // 撞击特效
-                            const impact = this.add.circle(die.x, die.y, 20, 0xffffff, 0.6);
-                            this.tweens.add({targets:impact, scale:0.2, alpha:0, duration:100, onComplete:()=>impact.destroy()});
+                        if(!die.active || !enemy.active) return;
+                        
+                        // 1. 修改点：处理精英怪撞击
+                        if(enemy.getData('type') === 'elite') {
+                             // 立即给予一次猛烈撞击伤害
+                             const dmg = this.build.impactDmg * 2; // 撞精英双倍物理伤害
+                             this.showDmg(enemy.x, enemy.y, dmg, '#fff');
+                             this.hitEnemy(enemy, dmg);
+                             
+                             // 标记为即将爆炸，不再被推着走
+                             if (!die.doomed) {
+                                 die.doomed = true;
+                                 die.setTint(0xffaa00);
+                                 // 100毫秒后强制引爆，模拟"撞击-停顿-爆炸"
+                                 this.time.delayedCall(100, () => { if(die.active) this.explodeDie(die); });
+                             }
+                        } else {
+                            // 普通怪逻辑
+                            if (die.body.speed > 0.5) {
+                                const dmg = this.build.impactDmg;
+                                this.showDmg(enemy.x, enemy.y, dmg, '#fff');
+                                this.hitEnemy(enemy, dmg);
+                                const impact = this.add.circle(die.x, die.y, 20, 0xffffff, 0.6);
+                                this.tweens.add({targets:impact, scale:0.2, alpha:0, duration:100, onComplete:()=>impact.destroy()});
+                            }
                         }
                     });
                     check(pair, 'player', 'bullet', (p, b) => { this.hitPlayer(5); b.destroy(); });
-                    check(pair, 'player', 'item', (p, item) => { this.healPlayer(30); item.destroy(); });
+                    
+                    // 掉落物逻辑
+                    check(pair, 'player', 'item_hp', (p, item) => { 
+                        this.healPlayer(30); 
+                        this.items = this.items.filter(i => i !== item);
+                        item.destroy(); 
+                    });
+                    check(pair, 'player', 'item_xp', (p, item) => { 
+                        this.gainXp(100); // 超级经验
+                        const txt = this.add.text(p.x, p.y-40, "XP MAX", {color:'#ffd700', fontSize:20, fontStyle:'bold'}).setOrigin(0.5);
+                        this.tweens.add({targets:txt, y:p.y-80, alpha:0, duration:800, onComplete:()=>txt.destroy()});
+                        this.items = this.items.filter(i => i !== item);
+                        item.destroy(); 
+                    });
                 });
             });
 
@@ -268,9 +298,9 @@
                     check(pair, 'player', 'enemy', (p, e) => {
                         if (!e.getData('frozen')) this.hitPlayer(10);
                     });
-                    // 持续推挤时也造成轻微伤害
                     check(pair, 'die', 'enemy', (die, enemy) => {
-                        if (die.body.speed > 0.2 && scene.time.now % 10 === 0) {
+                        // 普通怪持续推挤
+                        if (die.body.speed > 0.2 && scene.time.now % 10 === 0 && enemy.getData('type') !== 'elite') {
                             this.hitEnemy(enemy, 1); 
                         }
                     });
@@ -327,7 +357,6 @@
             if(this.isPaused) return;
             this.drawHpBars();
 
-            // 玩家移动
             if(inputMode === 'click' && this.clickDest) {
                 const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, this.clickDest.x, this.clickDest.y);
                 if(dist > 10) {
@@ -340,20 +369,17 @@
                 this.player.setVelocity(this.joyStick.vec.x * C.PLAYER.SPEED, this.joyStick.vec.y * C.PLAYER.SPEED);
             }
             
-            // 边界限制
             const b = 40; 
             if (this.player.x < b) { this.player.setX(b); this.player.setVelocityX(0); }
             if (this.player.x > C.MAP_SIZE - b) { this.player.setX(C.MAP_SIZE - b); this.player.setVelocityX(0); }
             if (this.player.y < b) { this.player.setY(b); this.player.setVelocityY(0); }
             if (this.player.y > C.MAP_SIZE - b) { this.player.setY(C.MAP_SIZE - b); this.player.setVelocityY(0); }
 
-            // 自动开火
             if(!this.nextFire || t > this.nextFire) {
                 this.fireDice();
                 this.nextFire = t + this.build.cooldown;
             }
 
-            // 敌人AI
             this.enemies.forEach(e => {
                 if(!e.active) return;
                 if (e.getData('frozen')) {
@@ -369,26 +395,23 @@
                 } else {
                     const angle = Phaser.Math.Angle.Between(e.x, e.y, this.player.x, this.player.y);
                     const speed = e.data.get('speed');
-                    // 使用 applyForce 代替 setVelocity 来允许物理碰撞反推
-                    // 但为了保持移动，我们混合使用
                     e.setVelocity(Math.cos(angle)*speed, Math.sin(angle)*speed);
                 }
             });
 
-            // 骰子逻辑
             this.diceList.forEach((d, i) => {
+                if (d.doomed) return; // 已经被判死刑的骰子交给delayedCall处理
+                
                 d.life++;
                 if (t > d.nextRollTime && d.body.speed > 1) {
                     d.setTexture(`die_${Phaser.Math.Between(1, 6)}`);
                     d.nextRollTime = t + 80;
                 }
 
-                // 2. 修改点：即时爆破 - 速度一旦降低到 1.0 以下，立即爆炸
                 if(d.body.speed < 1.0 && d.life > 10) {
                     this.explodeDie(d);
                     this.diceList.splice(i, 1);
                 }
-                // 即使没停，时间太长也爆
                 if(d.life > 240) { 
                     this.explodeDie(d);
                     this.diceList.splice(i, 1);
@@ -424,12 +447,12 @@
                 x = Phaser.Math.Clamp(x, 100, C.MAP_SIZE-100);
                 y = Phaser.Math.Clamp(y, 100, C.MAP_SIZE-100);
 
-                let type = 'enemy', hp = 10, speed = 4 + Math.random(), w = 28, density = 0.5; // 默认很轻
+                let type = 'enemy', hp = 10, speed = 4 + Math.random(), w = 28, density = 0.5; 
                 let isElite = false;
 
                 const roll = Math.random();
                 if(roll < 0.05) { 
-                    type = 'enemy_e'; hp = 200; speed = 2; w = 96; isElite = true; density = 20; // 精英很重
+                    type = 'enemy_e'; hp = 200; speed = 2; w = 96; isElite = true; density = 20; 
                 } else if (roll < 0.25) {
                     type = 'enemy_s'; hp = 15; speed = 3; w = 32;
                 }
@@ -448,8 +471,6 @@
 
                 e.setCollisionCategory(C.CAT.ENEMY);
                 e.setCollidesWith([C.CAT.PLAYER, C.CAT.DIE, C.CAT.WALL, C.CAT.ENEMY]);
-                
-                // 1. 修改点：调整密度
                 e.setDensity(density);
                 e.setFrictionAir(0.05);
                 this.enemies.push(e);
@@ -494,15 +515,14 @@
                     d.name = 'die'; d.life = 0;
                     d.finalPoint = Phaser.Math.Between(1, 6);
                     d.nextRollTime = 0;
+                    d.doomed = false;
 
                     d.setBody({type: 'rectangle', width: size, height: size});
                     d.setDisplaySize(size, size); 
                     d.setCollisionCategory(C.CAT.DIE);
                     d.setCollidesWith([C.CAT.ENEMY, C.CAT.WALL]);
-                    d.setBounce(0.4); // 降低弹性，更像重物
-                    d.setFrictionAir(this.build.friction); // 低摩擦，滑得远
-                    
-                    // 1. 修改点：骰子密度极大，像推土机一样
+                    d.setBounce(0.4); 
+                    d.setFrictionAir(this.build.friction); 
                     d.setDensity(20); 
 
                     const spd = 12 * this.build.speed;
@@ -514,7 +534,8 @@
         }
 
         explodeDie(d) {
-            d.setCollisionCategory(0); // 爆炸瞬间取消碰撞，防止物理异常
+            if(!d.active) return;
+            d.setCollisionCategory(0); 
             d.setVelocity(0,0);
             d.setStatic(true); 
             d.setRotation(0);
@@ -523,16 +544,14 @@
             const point = d.finalPoint;
             const isCrit = point === 6;
             const radius = this.build.radius * (isCrit ? 1.5 : 1);
-            const dmg = point * 10 * (isCrit ? 2 : 1); // 爆炸伤害
+            // 2. 修改点：应用爆炸伤害倍率
+            const dmg = point * 10 * (isCrit ? 2 : 1) * this.build.explodeDmgMult; 
 
-            // 爆炸数字
             this.showDmg(d.x, d.y - 25, point, isCrit ? '#ff0' : '#0ff', isCrit ? 40 : 24);
 
-            // 爆炸特效
             const c = this.add.circle(d.x, d.y, 10, isCrit?0xffd700:0xffffff, 0.5);
             this.tweens.add({targets:c, scale: radius/10, alpha:0, duration:200});
 
-            // 偶数激光
             if (point % 2 === 0) {
                 let nearest = null; let minD = 600; 
                 this.enemies.forEach(e => {
@@ -549,11 +568,9 @@
                 }
             }
 
-            // 奇数冰冻
             let freezeSuccess = false;
             if (point % 2 !== 0 && Math.random() < this.build.freezeChance) freezeSuccess = true;
 
-            // AOE 伤害
             for(let i = this.enemies.length - 1; i >= 0; i--) {
                 const e = this.enemies[i];
                 if(!e.active) continue;
@@ -577,7 +594,6 @@
                 }
             }
             
-            // 快速销毁
             this.time.delayedCall(250, () => { if(d.active) d.destroy(); });
         }
 
@@ -592,9 +608,14 @@
             e.setData('hp', hp);
             if(hp <= 0) {
                 if(e.getData('type') === 'elite') {
-                    const item = this.matter.add.sprite(e.x, e.y, 'item');
-                    item.name = 'item'; item.setSensor(true);
+                    // 2. 修改点：掉落物逻辑 - 超过5个血包改掉经验
+                    const hpCount = this.items.filter(i => i.active && i.name === 'item_hp').length;
+                    let dropType = (hpCount >= 5) ? 'item_xp' : 'item_hp';
+                    
+                    const item = this.matter.add.sprite(e.x, e.y, dropType);
+                    item.name = dropType; item.setSensor(true);
                     item.setCollisionCategory(C.CAT.ITEM); item.setCollidesWith([C.CAT.PLAYER]);
+                    this.items.push(item);
                     this.gainXp(50);
                 } else {
                     this.gainXp(2);
@@ -658,6 +679,7 @@
             this.matter.pause();
             const pool = [
                 {t:"多重投掷", desc:"骰子数量 +1", fn:()=>this.build.diceCount++},
+                {t:"爆破专家", desc:"爆炸伤害 +25%", fn:()=>this.build.explodeDmgMult += 0.25},
                 {t:"重型材质", desc:"撞击伤害 +15", fn:()=>this.build.impactDmg += 15},
                 {t:"巨大化", desc:"骰子体积 +25%", fn:()=>this.build.size*=1.25},
                 {t:"高爆火药", desc:"爆炸范围 +20%", fn:()=>this.build.radius*=1.2},
