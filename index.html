@@ -3,11 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>绝境骰子 - V7.2 索敌修正版</title>
+    <title>绝境骰子 - V7.3 破阵物理版</title>
     <style>
         body { margin: 0; padding: 0; background-color: #000; overflow: hidden; font-family: 'Segoe UI', sans-serif; user-select: none; -webkit-user-select: none; touch-action: none; color: white;}
         
-        /* UI 布局 */
         #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: none; flex-direction: column; justify-content: space-between; z-index: 10; }
         .top-bar { display: flex; justify-content: space-between; padding: 15px; background: linear-gradient(to bottom, rgba(0,0,0,0.9), transparent); pointer-events: auto;}
         .stat-box { text-align: right; text-shadow: 1px 1px 2px black; }
@@ -58,7 +57,7 @@
 
     <div id="screen-start" class="overlay">
         <h1 style="font-size: 40px; color: #ffcc00; margin:0;">PROJECT<br>DICE SURVIVOR</h1>
-        <p style="color:#888; letter-spacing: 2px;">V7.2 索敌修正版</p>
+        <p style="color:#888; letter-spacing: 2px;">V7.3 破阵物理版</p>
         <p style="color:#fff;">历史最高: <span id="best-score">0</span></p>
         <button class="btn-start" onclick="gameStart()">DEPLOY</button>
     </div>
@@ -107,7 +106,6 @@
             scale: { mode: Phaser.Scale.RESIZE },
             physics: {
                 default: 'matter',
-                // 3. 修改点：强制固定步长，解决PC端速度过快的问题
                 matter: { 
                     gravity: { y: 0 }, 
                     positionIterations: 6, 
@@ -132,7 +130,7 @@
         constructor() { super('MainScene'); }
 
         preload() {
-            // 通用绘图函数
+            // 贴图生成
             const gen = (k, c, w, h, type) => {
                 if(this.textures.exists(k)) return;
                 const g = this.make.graphics({add:false});
@@ -154,13 +152,12 @@
             g.lineStyle(1, 0x333333); g.strokeRect(0,0,128,128);
             g.generateTexture('grid', 128, 128);
 
-            // 1. 修改点：生成 1-6 点数的骰子贴图
             this.generateDiceTextures();
         }
 
         generateDiceTextures() {
             const size = 30;
-            const dotSize = 4;
+            const dotSize = 3.5; // 稍微缩小点数，避免边缘
             const positions = {
                 1: [[0.5, 0.5]],
                 2: [[0.25, 0.25], [0.75, 0.75]],
@@ -173,26 +170,20 @@
             for (let i = 1; i <= 6; i++) {
                 if (this.textures.exists(`die_${i}`)) continue;
                 const g = this.make.graphics({add: false});
-                
-                // 底色
                 g.fillStyle(0xffffff);
-                g.fillRoundedRect(0, 0, size, size, 4);
-                g.lineStyle(1, 0x999999);
-                g.strokeRoundedRect(0, 0, size, size, 4);
-                
-                // 点数
+                g.fillRoundedRect(0, 0, size, size, 5); // 圆角
+                g.lineStyle(2, 0x999999);
+                g.strokeRoundedRect(0, 0, size, size, 5);
                 g.fillStyle(0x000000);
                 positions[i].forEach(pos => {
                     g.fillCircle(size * pos[0], size * pos[1], dotSize);
                 });
-                
                 g.generateTexture(`die_${i}`, size, size);
             }
         }
 
         create() {
             scene = this;
-            
             this.matter.world.setBounds(0, 0, C.MAP_SIZE, C.MAP_SIZE);
             
             const wallThick = 2000;
@@ -206,8 +197,8 @@
             ];
             walls.forEach(w => { w.collisionFilter = { category: C.CAT.WALL }; });
 
-            this.add.rectangle(mid, mid, C.MAP_SIZE, C.MAP_SIZE).setStrokeStyle(10, 0xff0000, 0.5);
             this.add.tileSprite(mid, mid, C.MAP_SIZE, C.MAP_SIZE, 'grid').setDepth(-1);
+            this.add.rectangle(mid, mid, C.MAP_SIZE, C.MAP_SIZE).setStrokeStyle(10, 0xff0000, 0.5);
 
             this.player = this.matter.add.sprite(mid, mid, 'player');
             this.player.name = 'player'; 
@@ -222,68 +213,69 @@
 
             this.cameras.main.setZoom(C.ZOOM);
             this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
-            this.cameras.main.setBounds(-200, -200, C.MAP_SIZE+400, C.MAP_SIZE+400);
 
             this.dataState = { level: 1, xp: 0, nextXp: 10, kills: 0, time: 0 };
             this.build = { 
-                diceCount: 1, size: 1.0, speed: 1.0, radius: 100, cooldown: 1000, friction: 0.08, impactDmg: 10,
-                laserDmgMult: 1.0, 
-                freezeChance: 0.2 
+                diceCount: 1, size: 1.0, speed: 1.0, radius: 120, cooldown: 1000, 
+                friction: 0.05, impactDmg: 20, // 初始撞击伤害提高
+                laserDmgMult: 1.0, freezeChance: 0.2 
             };
             this.enemies = [];
             this.diceList = [];
-            this.hpBars = []; 
             this.lastHurtTime = 0;
             this.isPaused = false;
 
             this.setupInput();
+            this.setupCollisions();
 
+            this.time.addEvent({ delay: 1000, loop: true, callback: this.updateTime, callbackScope: this });
+            this.spawnEvent = this.time.addEvent({ delay: C.SPAWN.START_DELAY, loop: true, callback: this.spawnEnemy, callbackScope: this });
+            this.hpGraphics = this.add.graphics().setDepth(150);
+            this.updateUI();
+        }
+
+        setupCollisions() {
             const check = (pair, n1, n2, cb) => {
                 const { bodyA, bodyB } = pair;
-                const objA = bodyA.gameObject;
-                const objB = bodyB.gameObject;
+                const objA = bodyA.gameObject; const objB = bodyB.gameObject;
                 if (!objA || !objB) return;
-                
                 if ((objA.name === n1 && objB.name === n2)) cb(objA, objB);
                 else if ((objB.name === n1 && objA.name === n2)) cb(objB, objA);
             };
 
             this.matter.world.on('collisionstart', (event) => {
                 event.pairs.forEach(pair => {
+                    // 撞击伤害逻辑
                     check(pair, 'die', 'enemy', (die, enemy) => {
-                        if (die.body.speed > 1.5) {
+                        // 只要有速度就造成伤害
+                        if (die.body.speed > 0.5) {
+                            const dmg = this.build.impactDmg;
+                            this.showDmg(enemy.x, enemy.y, dmg, '#fff'); // 白色数字表示撞击
+                            this.hitEnemy(enemy, dmg);
+                            
+                            // 撞击特效
                             const impact = this.add.circle(die.x, die.y, 20, 0xffffff, 0.6);
-                            this.tweens.add({targets:impact, scale:0.2, alpha:0, duration:150, onComplete:()=>impact.destroy()});
-                            this.hitEnemy(enemy, die, this.build.impactDmg);
+                            this.tweens.add({targets:impact, scale:0.2, alpha:0, duration:100, onComplete:()=>impact.destroy()});
                         }
                     });
-                    check(pair, 'player', 'bullet', (p, b) => {
-                        this.hitPlayer(5);
-                        b.destroy();
-                    });
-                    check(pair, 'player', 'item', (p, item) => {
-                        this.healPlayer(30);
-                        item.destroy();
-                    });
+                    check(pair, 'player', 'bullet', (p, b) => { this.hitPlayer(5); b.destroy(); });
+                    check(pair, 'player', 'item', (p, item) => { this.healPlayer(30); item.destroy(); });
                 });
             });
 
             this.matter.world.on('collisionactive', (event) => {
                 event.pairs.forEach(pair => {
                     check(pair, 'player', 'enemy', (p, e) => {
-                        if (!e.getData('frozen')) {
-                            this.hitPlayer(10);
+                        if (!e.getData('frozen')) this.hitPlayer(10);
+                    });
+                    // 持续推挤时也造成轻微伤害
+                    check(pair, 'die', 'enemy', (die, enemy) => {
+                        if (die.body.speed > 0.2 && scene.time.now % 10 === 0) {
+                            this.hitEnemy(enemy, 1); 
                         }
                     });
                 });
             });
-
-            this.time.addEvent({ delay: 1000, loop: true, callback: this.updateTime, callbackScope: this });
-            this.spawnEvent = this.time.addEvent({ delay: C.SPAWN.START_DELAY, loop: true, callback: this.spawnEnemy, callbackScope: this });
-            
-            this.hpGraphics = this.add.graphics().setDepth(150);
-
-            this.updateUI();
         }
 
         setupInput() {
@@ -291,7 +283,6 @@
             this.joyStick = { active: false, x: 0, y: 0, vec: new Phaser.Math.Vector2() };
             this.clickDest = null;
             this.marker = this.add.circle(0,0,10,0x00ff00).setVisible(false).setDepth(90);
-
             this.joyBase = this.add.circle(0,0,60,0xffffff,0.1).setScrollFactor(0).setVisible(false).setDepth(999);
             this.joyThumb = this.add.circle(0,0,30,0xffffff,0.5).setScrollFactor(0).setVisible(false).setDepth(999);
 
@@ -308,7 +299,6 @@
                     this.joyThumb.setPosition(p.x, p.y).setVisible(true);
                 }
             });
-
             this.input.on('pointermove', p => {
                 if(this.joyStick.active) {
                     const d = Phaser.Math.Distance.Between(this.joyStick.x, this.joyStick.y, p.x, p.y);
@@ -319,7 +309,6 @@
                     this.joyStick.vec.set(Math.cos(a), Math.sin(a));
                 }
             });
-
             this.input.on('pointerup', () => {
                 this.joyStick.active = false;
                 this.joyBase.setVisible(false); this.joyThumb.setVisible(false);
@@ -336,15 +325,9 @@
 
         update(t, dt) {
             if(this.isPaused) return;
-
             this.drawHpBars();
 
-            const b = 40; 
-            if (this.player.x < b) { this.player.setX(b); this.player.setVelocityX(0); }
-            if (this.player.x > C.MAP_SIZE - b) { this.player.setX(C.MAP_SIZE - b); this.player.setVelocityX(0); }
-            if (this.player.y < b) { this.player.setY(b); this.player.setVelocityY(0); }
-            if (this.player.y > C.MAP_SIZE - b) { this.player.setY(C.MAP_SIZE - b); this.player.setVelocityY(0); }
-
+            // 玩家移动
             if(inputMode === 'click' && this.clickDest) {
                 const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, this.clickDest.x, this.clickDest.y);
                 if(dist > 10) {
@@ -356,23 +339,27 @@
             } else if (inputMode === 'joystick') {
                 this.player.setVelocity(this.joyStick.vec.x * C.PLAYER.SPEED, this.joyStick.vec.y * C.PLAYER.SPEED);
             }
+            
+            // 边界限制
+            const b = 40; 
+            if (this.player.x < b) { this.player.setX(b); this.player.setVelocityX(0); }
+            if (this.player.x > C.MAP_SIZE - b) { this.player.setX(C.MAP_SIZE - b); this.player.setVelocityX(0); }
+            if (this.player.y < b) { this.player.setY(b); this.player.setVelocityY(0); }
+            if (this.player.y > C.MAP_SIZE - b) { this.player.setY(C.MAP_SIZE - b); this.player.setVelocityY(0); }
 
+            // 自动开火
             if(!this.nextFire || t > this.nextFire) {
                 this.fireDice();
                 this.nextFire = t + this.build.cooldown;
             }
 
+            // 敌人AI
             this.enemies.forEach(e => {
                 if(!e.active) return;
-                
                 if (e.getData('frozen')) {
-                    e.setVelocity(0, 0);
-                    e.setAngularVelocity(0);
-                    return; 
+                    e.setVelocity(0, 0); e.setAngularVelocity(0); return; 
                 }
-
                 const dist = Phaser.Math.Distance.Between(e.x, e.y, this.player.x, this.player.y);
-                
                 if(e.data.get('type') === 'shooter' && dist < 400) {
                     if(t > e.data.get('nextShot')) {
                         this.fireEnemyBullet(e);
@@ -382,24 +369,27 @@
                 } else {
                     const angle = Phaser.Math.Angle.Between(e.x, e.y, this.player.x, this.player.y);
                     const speed = e.data.get('speed');
+                    // 使用 applyForce 代替 setVelocity 来允许物理碰撞反推
+                    // 但为了保持移动，我们混合使用
                     e.setVelocity(Math.cos(angle)*speed, Math.sin(angle)*speed);
                 }
             });
 
+            // 骰子逻辑
             this.diceList.forEach((d, i) => {
                 d.life++;
-                
-                // 1. 修改点：骰子滚动动画（飞行中随机切换贴图）
                 if (t > d.nextRollTime && d.body.speed > 1) {
                     d.setTexture(`die_${Phaser.Math.Between(1, 6)}`);
-                    d.nextRollTime = t + 100; // 每100ms切一次图
+                    d.nextRollTime = t + 80;
                 }
 
-                if(d.body.speed < 0.5 && d.life > 15) {
+                // 2. 修改点：即时爆破 - 速度一旦降低到 1.0 以下，立即爆炸
+                if(d.body.speed < 1.0 && d.life > 10) {
                     this.explodeDie(d);
                     this.diceList.splice(i, 1);
                 }
-                if(d.life > 300) { 
+                // 即使没停，时间太长也爆
+                if(d.life > 240) { 
                     this.explodeDie(d);
                     this.diceList.splice(i, 1);
                 }
@@ -409,30 +399,16 @@
         drawHpBars() {
             this.hpGraphics.clear();
             this.enemies.forEach(e => {
-                if (!e.active) return;
-                if (e.getData('type') === 'elite') {
-                    const max = e.getData('maxHp');
-                    const cur = e.getData('hp');
-                    const pct = Phaser.Math.Clamp(cur/max, 0, 1);
-                    
-                    const w = 80;
-                    const h = 8;
-                    const x = e.x - w/2;
-                    const y = e.y - e.height/2 - 20;
-
-                    this.hpGraphics.fillStyle(0x000000, 0.8);
-                    this.hpGraphics.fillRect(x, y, w, h);
-                    
-                    const color = Phaser.Display.Color.Interpolate.ColorWithColor(
-                        new Phaser.Display.Color(255, 0, 0),
-                        new Phaser.Display.Color(0, 255, 0),
-                        100, pct * 100
-                    );
-                    const cHex = Phaser.Display.Color.GetColor(color.r, color.g, color.b);
-
-                    this.hpGraphics.fillStyle(cHex, 1);
-                    this.hpGraphics.fillRect(x+1, y+1, (w-2)*pct, h-2);
-                }
+                if (!e.active || e.getData('type') !== 'elite') return;
+                const max = e.getData('maxHp');
+                const cur = e.getData('hp');
+                const pct = Phaser.Math.Clamp(cur/max, 0, 1);
+                const w = 80; const h = 8;
+                const x = e.x - w/2; const y = e.y - e.height/2 - 20;
+                this.hpGraphics.fillStyle(0x000000, 0.8);
+                this.hpGraphics.fillRect(x, y, w, h);
+                this.hpGraphics.fillStyle(0x00ff00, 1);
+                this.hpGraphics.fillRect(x+1, y+1, (w-2)*pct, h-2);
             });
         }
 
@@ -448,12 +424,12 @@
                 x = Phaser.Math.Clamp(x, 100, C.MAP_SIZE-100);
                 y = Phaser.Math.Clamp(y, 100, C.MAP_SIZE-100);
 
-                let type = 'enemy', hp = 10, speed = 4 + Math.random(), w = 28;
+                let type = 'enemy', hp = 10, speed = 4 + Math.random(), w = 28, density = 0.5; // 默认很轻
                 let isElite = false;
 
                 const roll = Math.random();
                 if(roll < 0.05) { 
-                    type = 'enemy_e'; hp = 150; speed = 2; w = 96; isElite = true; 
+                    type = 'enemy_e'; hp = 200; speed = 2; w = 96; isElite = true; density = 20; // 精英很重
                 } else if (roll < 0.25) {
                     type = 'enemy_s'; hp = 15; speed = 3; w = 32;
                 }
@@ -466,15 +442,15 @@
                 else if(isElite) e.setData('type', 'elite');
                 else e.setData('type', 'chaser');
 
-                e.setData('hp', hp);
-                e.setData('maxHp', hp); 
-                e.setData('speed', speed);
-                e.setData('frozen', false); 
+                e.setData('hp', hp); e.setData('maxHp', hp); 
+                e.setData('speed', speed); e.setData('frozen', false); 
                 if(type==='enemy_s') e.setData('nextShot', this.time.now + 1000);
 
                 e.setCollisionCategory(C.CAT.ENEMY);
                 e.setCollidesWith([C.CAT.PLAYER, C.CAT.DIE, C.CAT.WALL, C.CAT.ENEMY]);
-                e.setDensity(isElite ? 5 : 1);
+                
+                // 1. 修改点：调整密度
+                e.setDensity(density);
                 e.setFrictionAir(0.05);
                 this.enemies.push(e);
             }
@@ -483,11 +459,8 @@
         fireEnemyBullet(e) {
             if (e.getData('frozen')) return; 
             const b = this.matter.add.sprite(e.x, e.y, 'bullet');
-            b.name = 'bullet';
-            b.setSensor(true);
-            b.setCollisionCategory(C.CAT.BULLET);
-            b.setCollidesWith([C.CAT.PLAYER]);
-            
+            b.name = 'bullet'; b.setSensor(true);
+            b.setCollisionCategory(C.CAT.BULLET); b.setCollidesWith([C.CAT.PLAYER]);
             const a = Phaser.Math.Angle.Between(e.x, e.y, this.player.x, this.player.y);
             b.setVelocity(Math.cos(a)*5, Math.sin(a)*5);
             this.time.delayedCall(3000, ()=>b.destroy());
@@ -496,50 +469,41 @@
         fireDice() {
             for(let i=0; i<this.build.diceCount; i++) {
                 this.time.delayedCall(i*100, () => {
-                    // 2. 修改点：自动索敌逻辑
-                    let angle = 0;
-                    let nearest = null;
-                    let minD = 999999;
-
-                    // 寻找最近的敌人
+                    let angle = 0; let nearest = null; let minD = 999999;
                     this.enemies.forEach(e => {
                         if (!e.active) return;
                         const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, e.x, e.y);
                         if (d < minD) { minD = d; nearest = e; }
                     });
 
-                    if (nearest && minD < 800) { // 800范围内有敌人则瞄准
+                    if (nearest && minD < 800) {
                         angle = Phaser.Math.Angle.Between(this.player.x, this.player.y, nearest.x, nearest.y);
-                    } else if (this.player.body.speed > 0.5) { // 否则沿移动方向
+                    } else if (this.player.body.speed > 0.5) {
                         angle = Math.atan2(this.player.body.velocity.y, this.player.body.velocity.x);
-                    } else { // 静止且无怪则随机
+                    } else {
                         angle = Math.random() * 6.28;
                     }
-
-                    // 2. 修改点：增加散射，避免重叠
                     angle += Phaser.Math.FloatBetween(-0.1, 0.1);
 
-                    // 2. 修改点：生成偏移，防止和主角重叠
-                    const spawnOffset = 40;
+                    const spawnOffset = 50;
                     const spawnX = this.player.x + Math.cos(angle) * spawnOffset;
                     const spawnY = this.player.y + Math.sin(angle) * spawnOffset;
-
                     const size = 30 * this.build.size;
-                    // 1. 修改点：使用预生成的贴图
+                    
                     const d = this.matter.add.sprite(spawnX, spawnY, 'die_1');
                     d.name = 'die'; d.life = 0;
-                    
-                    // 1. 修改点：发射时确定结果
                     d.finalPoint = Phaser.Math.Between(1, 6);
                     d.nextRollTime = 0;
 
                     d.setBody({type: 'rectangle', width: size, height: size});
-                    d.setDisplaySize(size, size); // 确保贴图缩放正确
+                    d.setDisplaySize(size, size); 
                     d.setCollisionCategory(C.CAT.DIE);
                     d.setCollidesWith([C.CAT.ENEMY, C.CAT.WALL]);
-                    d.setBounce(0.8);
-                    d.setFrictionAir(this.build.friction); 
-                    d.setDensity(2);
+                    d.setBounce(0.4); // 降低弹性，更像重物
+                    d.setFrictionAir(this.build.friction); // 低摩擦，滑得远
+                    
+                    // 1. 修改点：骰子密度极大，像推土机一样
+                    d.setDensity(20); 
 
                     const spd = 12 * this.build.speed;
                     d.setVelocity(Math.cos(angle)*spd, Math.sin(angle)*spd);
@@ -550,61 +514,56 @@
         }
 
         explodeDie(d) {
+            d.setCollisionCategory(0); // 爆炸瞬间取消碰撞，防止物理异常
             d.setVelocity(0,0);
             d.setStatic(true); 
-            d.setAngularVelocity(0);
-            d.setRotation(0); // 摆正
-
-            // 1. 修改点：使用预定结果并显示正确贴图
-            const point = d.finalPoint;
-            d.setTexture(`die_${point}`);
+            d.setRotation(0);
+            d.setTexture(`die_${d.finalPoint}`);
             
+            const point = d.finalPoint;
             const isCrit = point === 6;
             const radius = this.build.radius * (isCrit ? 1.5 : 1);
-            const dmg = point * 8 * (isCrit ? 2 : 1);
+            const dmg = point * 10 * (isCrit ? 2 : 1); // 爆炸伤害
 
-            const txt = this.add.text(d.x, d.y - 25, point, { 
-                fontSize: isCrit?36:24, fontStyle: 'bold', color: isCrit?'#ff0':'#fff',
-                stroke: '#000', strokeThickness: 3
-            }).setOrigin(0.5).setDepth(200);
+            // 爆炸数字
+            this.showDmg(d.x, d.y - 25, point, isCrit ? '#ff0' : '#0ff', isCrit ? 40 : 24);
 
+            // 爆炸特效
             const c = this.add.circle(d.x, d.y, 10, isCrit?0xffd700:0xffffff, 0.5);
-            this.tweens.add({targets:c, scale: radius/10, alpha:0, duration:250});
-            this.tweens.add({targets:txt, y:d.y-50, alpha:0, scale: 1.5, duration:500, onComplete:()=>txt.destroy()});
+            this.tweens.add({targets:c, scale: radius/10, alpha:0, duration:200});
 
+            // 偶数激光
             if (point % 2 === 0) {
-                let nearest = null;
-                let minD = 600; 
+                let nearest = null; let minD = 600; 
                 this.enemies.forEach(e => {
                     if (!e.active) return;
                     const dist = Phaser.Math.Distance.Between(d.x, d.y, e.x, e.y);
                     if (dist < minD) { minD = dist; nearest = e; }
                 });
-
                 if (nearest) {
                     const laser = this.add.graphics();
                     laser.lineStyle(point * 2, 0x00ffff, 1); 
                     laser.lineBetween(d.x, d.y, nearest.x, nearest.y);
-                    this.tweens.add({targets: laser, alpha: 0, duration: point * 100, onComplete: ()=>laser.destroy()}); 
-                    this.hitEnemy(nearest, null, dmg * 2 * this.build.laserDmgMult);
+                    this.tweens.add({targets: laser, alpha: 0, duration: 300, onComplete: ()=>laser.destroy()}); 
+                    this.hitEnemy(nearest, dmg * 1.5 * this.build.laserDmgMult);
                 }
             }
 
+            // 奇数冰冻
             let freezeSuccess = false;
-            if (point % 2 !== 0 && Math.random() < this.build.freezeChance) {
-                freezeSuccess = true;
-            }
+            if (point % 2 !== 0 && Math.random() < this.build.freezeChance) freezeSuccess = true;
 
+            // AOE 伤害
             for(let i = this.enemies.length - 1; i >= 0; i--) {
                 const e = this.enemies[i];
                 if(!e.active) continue;
                 const dist = Phaser.Math.Distance.Between(d.x, d.y, e.x, e.y);
                 if(dist <= radius) {
                     const angle = Phaser.Math.Angle.Between(d.x, d.y, e.x, e.y);
-                    const force = 0.2 * this.build.size;
+                    const force = 0.1 * this.build.size;
                     e.applyForce({x:Math.cos(angle)*force, y:Math.sin(angle)*force});
-                    this.hitEnemy(e, null, dmg);
-
+                    this.hitEnemy(e, dmg);
+                    
                     if (freezeSuccess) {
                         e.setData('frozen', true);
                         e.setTint(0x00aaff); 
@@ -618,35 +577,28 @@
                 }
             }
             
-            // 延迟销毁，让玩家看清点数
-            this.time.delayedCall(300, () => {
-                if(d.active) d.destroy();
-            });
+            // 快速销毁
+            this.time.delayedCall(250, () => { if(d.active) d.destroy(); });
         }
 
-        hitEnemy(e, sourceBody, damageOverride) {
-            const dmg = damageOverride || 5;
+        showDmg(x, y, dmg, color, size=16) {
+            const txt = this.add.text(x, y, Math.floor(dmg), { fontSize: size, fontStyle: 'bold', color: color, stroke: '#000', strokeThickness: 2 }).setOrigin(0.5).setDepth(200);
+            this.tweens.add({targets:txt, y:y-40, alpha:0, duration:600, onComplete:()=>txt.destroy()});
+        }
+
+        hitEnemy(e, dmg) {
             let hp = e.getData('hp');
             hp -= dmg;
             e.setData('hp', hp);
-            
-            if (!e.getData('frozen')) {
-                e.setTint(0xffffff);
-                this.time.delayedCall(50, ()=> { if(e.active && !e.getData('frozen')) e.clearTint(); });
-            }
-
             if(hp <= 0) {
                 if(e.getData('type') === 'elite') {
                     const item = this.matter.add.sprite(e.x, e.y, 'item');
-                    item.name = 'item';
-                    item.setSensor(true);
-                    item.setCollisionCategory(C.CAT.ITEM);
-                    item.setCollidesWith([C.CAT.PLAYER]);
+                    item.name = 'item'; item.setSensor(true);
+                    item.setCollisionCategory(C.CAT.ITEM); item.setCollidesWith([C.CAT.PLAYER]);
                     this.gainXp(50);
                 } else {
                     this.gainXp(2);
                 }
-                
                 this.dataState.kills++;
                 e.destroy();
                 this.enemies = this.enemies.filter(obj => obj !== e);
@@ -657,16 +609,13 @@
         hitPlayer(dmg) {
             if(this.time.now - this.lastHurtTime < C.PLAYER.INV_TIME) return;
             this.lastHurtTime = this.time.now;
-
             const curHp = this.player.getData('hp');
             const newHp = curHp - dmg;
             this.player.setData('hp', newHp);
-            
             this.cameras.main.shake(150, 0.01);
             this.player.setTint(0xff0000);
             this.time.delayedCall(150, ()=>this.player.clearTint());
             this.updateUI();
-
             if(newHp <= 0) this.gameOver();
         }
 
@@ -681,9 +630,7 @@
 
         gainXp(val) {
             this.dataState.xp += val;
-            if(this.dataState.xp >= this.dataState.nextXp) {
-                this.levelUp();
-            }
+            if(this.dataState.xp >= this.dataState.nextXp) this.levelUp();
             this.updateUI();
         }
 
@@ -709,7 +656,6 @@
         levelUp() {
             this.isPaused = true;
             this.matter.pause();
-            
             const pool = [
                 {t:"多重投掷", desc:"骰子数量 +1", fn:()=>this.build.diceCount++},
                 {t:"重型材质", desc:"撞击伤害 +15", fn:()=>this.build.impactDmg += 15},
@@ -717,7 +663,7 @@
                 {t:"高爆火药", desc:"爆炸范围 +20%", fn:()=>this.build.radius*=1.2},
                 {t:"极速装填", desc:"攻击冷却 -15%", fn:()=>this.build.cooldown*=0.85},
                 {t:"高速马达", desc:"移动速度 +10%", fn:()=>{C.PLAYER.SPEED*=1.1;}},
-                {t:"纳米润滑", desc:"滑行距离 +30% (减摩擦)", fn:()=>this.build.friction*=0.7},
+                {t:"纳米润滑", desc:"滑行距离 +30%", fn:()=>this.build.friction*=0.7},
                 {t:"钨金外壳", desc:"弹道速度 +20%", fn:()=>this.build.speed*=1.2},
                 {t:"光棱透镜", desc:"偶数激光伤害 +50%", fn:()=>this.build.laserDmgMult += 0.5},
                 {t:"液氮容器", desc:"奇数冰冻概率 +10%", fn:()=>this.build.freezeChance = Math.min(1.0, this.build.freezeChance + 0.1)},
@@ -728,11 +674,9 @@
                     this.player.setData('hp', this.player.getData('hp') + add);
                 }}
             ];
-            
             const picks = Phaser.Utils.Array.Shuffle(pool).slice(0, 3);
             const div = document.getElementById('upgrade-container');
             div.innerHTML = '';
-            
             picks.forEach(p => {
                 const c = document.createElement('div');
                 c.className = 'card';
