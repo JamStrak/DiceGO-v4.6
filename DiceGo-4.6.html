@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>绝境骰子 - 节奏优化版</title>
+    <style>
+        body { margin: 0; padding: 0; background-color: #000; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; user-select: none; -webkit-user-select: none; touch-action: none;}
+        canvas { display: block; margin: 0 auto; }
+        
+        /* UI Layer */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        
+        /* 控制按钮 */
+        #control-btn {
+            position: absolute; top: 20px; left: 20px;
+            pointer-events: auto;
+            background: rgba(0, 0, 0, 0.6);
+            border: 1px solid #00ff00;
+            color: #00ff00;
+            padding: 8px 15px;
+            font-size: 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: monospace;
+            transition: all 0.2s;
+            z-index: 50;
+        }
+        #control-btn:hover { background: rgba(0, 255, 0, 0.2); }
+        #control-hint { position: absolute; top: 55px; left: 20px; color: #666; font-size: 10px; font-family: monospace; }
+
+        /* XP & Level */
+        #xp-bar-bg { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); width: 40%; height: 16px; background: #333; border: 2px solid #555; border-radius: 8px; overflow: hidden;}
+        #xp-bar-fill { width: 0%; height: 100%; background: linear-gradient(90deg, #00ff00, #00cc00); transition: width 0.2s; }
+        #level-badge { position: absolute; top: 15px; left: calc(50% - 25% - 40px); color: #00ff00; font-weight: bold; font-size: 20px; text-shadow: 0 0 5px #000; }
+        
+        /* HP Bar */
+        #hp-bar-container { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); width: 300px; text-align: center; }
+        #hp-bar-bg { width: 100%; height: 20px; background: #333; border: 2px solid #fff; border-radius: 4px; overflow: hidden; margin-top: 5px;}
+        #hp-bar-fill { width: 100%; height: 100%; background: #ff3333; transition: width 0.1s; }
+        #hp-text { color: white; font-size: 14px; font-weight: bold; text-shadow: 1px 1px 0 #000; }
+        
+        /* Stats */
+        #kill-count { position: absolute; top: 20px; right: 20px; color: #fff; font-size: 24px; font-weight: bold; font-family: monospace;}
+
+        /* Panels */
+        .overlay-panel { 
+            display: none; 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            background: rgba(0,0,0,0.85); 
+            flex-direction: column; justify-content: center; align-items: center;
+            pointer-events: auto; z-index: 100; backdrop-filter: blur(4px);
+        }
+
+        .card-container { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;}
+        .card { 
+            width: 160px; height: 220px; 
+            background: #222; border: 2px solid #444; border-radius: 12px; 
+            padding: 15px; color: white; text-align: center; cursor: pointer;
+            transition: all 0.2s; display: flex; flex-direction: column; justify-content: space-between;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+        .card:hover { transform: translateY(-5px) scale(1.05); background: #333; border-color: #ffffff; box-shadow: 0 0 20px rgba(255, 255, 255, 0.2); }
+        .card h3 { color: #ffffff; margin: 5px 0 15px 0; font-size: 18px;}
+        .card p { font-size: 13px; color: #bbb; line-height: 1.4; flex-grow: 1; display: flex; align-items: center; justify-content: center;}
+        .card .type { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 1px; border: 1px solid #444; padding: 2px 6px; border-radius: 4px; width: fit-content; margin: 0 auto;}
+
+        #game-over-panel h1 { color: #ff3333; font-size: 60px; margin-bottom: 10px; }
+        #restart-btn { 
+            margin-top: 30px; padding: 15px 40px; font-size: 24px; 
+            background: #fff; color: #000; border: none; border-radius: 50px; 
+            cursor: pointer; font-weight: bold; transition: transform 0.1s;
+        }
+        #restart-btn:hover { transform: scale(1.1); background: #ffd700; }
+        .stat-line { color: #ccc; font-size: 20px; margin: 5px 0; }
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+</head>
+<body>
+    <div id="ui-layer">
+        <button id="control-btn" onclick="toggleControlMode()">🕹️ 模式: 虚拟摇杆</button>
+        <div id="control-hint">[按 Q 键切换]</div>
+
+        <div id="level-badge">LV. <span id="level-text">1</span></div>
+        <div id="xp-bar-bg"><div id="xp-bar-fill"></div></div>
+        <div id="kill-count">☠️ 0</div>
+
+        <div id="hp-bar-container">
+            <div id="hp-text">HP: 100 / 100</div>
+            <div id="hp-bar-bg"><div id="hp-bar-fill"></div></div>
+        </div>
+    </div>
+
+    <div id="upgrade-panel" class="overlay-panel">
+        <h2 style="color:white; margin-bottom: 30px; font-size: 32px;">系统升级</h2>
+        <div class="card-container" id="card-container"></div>
+    </div>
+
+    <div id="game-over-panel" class="overlay-panel">
+        <h1>MISSION FAILED</h1>
+        <div class="stat-line">存活时间: <span id="end-time">0s</span></div>
+        <div class="stat-line">总击杀数: <span id="end-kills">0</span></div>
+        <button id="restart-btn" onclick="restartGame()">再次挑战</button>
+    </div>
+
+    <script>
+    
+    const CONFIG = {
+        WORLD_WIDTH: 2400,
+        WORLD_HEIGHT: 2400,
+        PLAYER_SPEED: 6,
+        PLAYER_MAX_HP: 100,
+        PLAYER_INVINCIBLE_TIME: 300,
+        
+        ENEMY_CHASER_SPEED: 1.1,
+        ENEMY_SHOOTER_SPEED: 0.7,
+        ENEMY_ELITE_SPEED: 0.8,
+        
+        ENEMY_DAMAGE_CONTACT: 10, 
+        ENEMY_DAMAGE_ELITE: 30,
+        ENEMY_DAMAGE_BULLET: 5,   
+        
+        ENEMY_HP_NORMAL: 1,
+        ENEMY_HP_ELITE: 20, 
+        
+        SHOOTER_RANGE: 500,       
+        SHOOTER_COOLDOWN: 2000,
+        BULLET_SPEED: 3.0,
+        
+        BASE_DIE_SPEED: 12, 
+        BASE_DIE_SIZE: 25,
+        BASE_DIE_DENSITY: 0.8, 
+        // 改动：初始摩擦力降低，增加滑行距离 (原0.1)
+        INITIAL_FRICTION: 0.06, 
+        INITIAL_COOLDOWN: 900, 
+        
+        // 改动：初始刷怪频率稍微慢一点点，随等级提升
+        SPAWN_RATE_INITIAL: 800, 
+        SPAWN_RATE_MIN: 100, 
+        XP_BASE: 10, // 稍微提高初始XP需求
+
+        JOYSTICK_RADIUS: 100,
+        JOYSTICK_THUMB: 50
+    };
+
+    let gameInstance = null;
+    let globalControlMode = 'joystick'; 
+
+    function toggleControlMode() {
+        const btn = document.getElementById('control-btn');
+        if (globalControlMode === 'joystick') {
+            globalControlMode = 'click';
+            btn.innerText = '🎯 模式: 点击指令';
+            btn.style.borderColor = '#00ffff';
+            btn.style.color = '#00ffff';
+        } else {
+            globalControlMode = 'joystick';
+            btn.innerText = '🕹️ 模式: 虚拟摇杆';
+            btn.style.borderColor = '#00ff00';
+            btn.style.color = '#00ff00';
+        }
+        if (gameInstance && gameInstance.scene.scenes[0]) {
+            gameInstance.scene.scenes[0].setControlMode(globalControlMode);
+        }
+    }
+
+    class MainScene extends Phaser.Scene {
+        constructor() {
+            super({ key: 'MainScene' });
+        }
+
+        preload() {
+            this.createTexture('player', 0x00ffff, 30, 30, 'rect');
+            this.createTexture('enemy_chaser', 0xff3333, 24, 24, 'rect');
+            this.createTexture('enemy_shooter', 0x9933ff, 28, 28, 'triangle');
+            this.createTexture('enemy_elite', 0xff8800, 140, 140, 'rect'); 
+            this.createTexture('bullet', 0xff5500, 10, 10, 'circle');
+            this.createTexture('hp_pack', 0x00ff00, 30, 30, 'cross'); 
+            this.createBgGrid();
+        }
+
+        generateDieTextures(size) {
+            if (this.textures.exists(`die_${size}_1`)) return;
+            const pipRadius = size * 0.11;
+            const low = 0.28;
+            const mid = 0.5;
+            const high = 0.72;
+            const pipsMap = {
+                1: [[mid, mid]],
+                2: [[low, low], [high, high]],
+                3: [[low, low], [mid, mid], [high, high]],
+                4: [[low, low], [high, low], [low, high], [high, high]],
+                5: [[low, low], [high, low], [mid, mid], [low, high], [high, high]],
+                6: [[low, low], [high, low], [low, mid], [high, mid], [low, high], [high, high]]
+            };
+            for (let i = 1; i <= 6; i++) {
+                const g = this.make.graphics({ x: 0, y: 0, add: false });
+                g.fillStyle(0xffffff, 1);
+                g.lineStyle(Math.max(1, size*0.05), 0xcccccc, 1);
+                g.fillRect(0, 0, size, size);
+                g.strokeRect(0, 0, size, size);
+                g.fillStyle(0x000000, 1); 
+                const coords = pipsMap[i];
+                coords.forEach(pos => { g.fillCircle(pos[0] * size, pos[1] * size, pipRadius); });
+                g.generateTexture(`die_${size}_${i}`, size, size);
+            }
+        }
+
+        createBgGrid() {
+            const graphics = this.make.graphics({x: 0, y: 0, add: false});
+            graphics.fillStyle(0x111111);
+            graphics.fillRect(0, 0, 100, 100);
+            graphics.lineStyle(2, 0x222222);
+            graphics.strokeRect(0, 0, 100, 100);
+            graphics.generateTexture('grid', 100, 100);
+        }
+
+        createTexture(name, color, w, h, shape) {
+            if(this.textures.exists(name)) return;
+            const g = this.make.graphics({ x: 0, y: 0, add: false });
+            g.fillStyle(color, 1);
+            g.lineStyle(2, 0xffffff, 0.8);
+            if (shape === 'rect') { g.fillRect(0, 0, w, h); g.strokeRect(0, 0, w, h); }
+            else if (shape === 'triangle') { g.beginPath(); g.moveTo(w/2, 0); g.lineTo(w, h); g.lineTo(0, h); g.closePath(); g.fillPath(); g.strokePath(); }
+            else if (shape === 'circle') { g.fillCircle(w/2, h/2, w/2); g.strokeCircle(w/2, h/2, w/2); }
+            else if (shape === 'cross') { 
+                g.fillRect(w/3, 0, w/3, h); g.fillRect(0, h/3, w, h/3); 
+                g.lineStyle(1, 0x000, 0.5); g.strokeRect(w/3, 0, w/3, h); g.strokeRect(0, h/3, w, h/3);
+            }
+            g.generateTexture(name, w, h);
+        }
+
+        create() {
+            this.controlMode = globalControlMode;
+            this.moveTarget = null; 
+            this.moveMarker = null; 
+
+            this.joyStickBase = this.add.circle(0, 0, CONFIG.JOYSTICK_RADIUS, 0x888888, 0.2).setDepth(100).setVisible(false).setScrollFactor(0);
+            this.joyStickThumb = this.add.circle(0, 0, CONFIG.JOYSTICK_THUMB, 0xffffff, 0.4).setDepth(101).setVisible(false).setScrollFactor(0);
+            this.isJoyActive = false;
+            this.joyOrigin = new Phaser.Math.Vector2();
+            this.joyVector = new Phaser.Math.Vector2();
+
+            this.input.keyboard.on('keydown-Q', () => {
+                toggleControlMode();
+            });
+
+            this.stats = { hp: CONFIG.PLAYER_MAX_HP, maxHp: CONFIG.PLAYER_MAX_HP, level: 1, xp: 0, xpNext: CONFIG.XP_BASE, kills: 0, timeAlive: 0 };
+            
+            this.build = { 
+                dieCount: 1, 
+                dieSize: 1.0, 
+                dieSpeed: 1.0, 
+                blastRadius: 80, 
+                dieFriction: CONFIG.INITIAL_FRICTION, 
+                cooldown: CONFIG.INITIAL_COOLDOWN 
+            };
+            
+            this.nextAttackTime = 0;
+
+            this.matter.world.setBounds(0, 0, CONFIG.WORLD_WIDTH, CONFIG.WORLD_HEIGHT);
+            this.bg = this.add.tileSprite(CONFIG.WORLD_WIDTH/2, CONFIG.WORLD_HEIGHT/2, CONFIG.WORLD_WIDTH, CONFIG.WORLD_HEIGHT, 'grid');
+            this.cameras.main.setBounds(0, 0, CONFIG.WORLD_WIDTH, CONFIG.WORLD_HEIGHT);
+            
+            this.catPlayer = this.matter.world.nextCategory();
+            this.catEnemy = this.matter.world.nextCategory();
+            this.catDie = this.matter.world.nextCategory();
+            this.catBullet = this.matter.world.nextCategory();
+            this.catItem = this.matter.world.nextCategory();
+
+            this.player = this.matter.add.sprite(CONFIG.WORLD_WIDTH/2, CONFIG.WORLD_HEIGHT/2, 'player');
+            this.player.body.label = 'player';
+            this.player.setCollisionCategory(this.catPlayer);
+            this.player.setCollidesWith([this.catEnemy, this.catBullet, this.catItem, this.matter.world.localWorld.bounds]);
+            this.player.setFixedRotation();
+            this.player.setFrictionAir(0.15);
+            this.player.setDepth(10);
+            
+            this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+
+            this.moveMarker = this.add.circle(0, 0, 15);
+            this.moveMarker.setStrokeStyle(2, 0x00ff00);
+            this.moveMarker.setVisible(false);
+            this.moveMarker.setDepth(5);
+
+            this.enemies = [];
+            this.bullets = [];
+            this.dice = [];
+            this.items = [];
+            this.lastHitTime = 0;
+
+            this.input.on('pointerdown', (pointer) => {
+                if (this.isPaused) return;
+                if (pointer.y < 80 && pointer.x < 200) return; 
+
+                if (this.controlMode === 'click') {
+                    const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+                    this.moveTarget = new Phaser.Math.Vector2(worldPoint.x, worldPoint.y);
+                    this.moveMarker.setPosition(worldPoint.x, worldPoint.y);
+                    this.moveMarker.setVisible(true);
+                    this.moveMarker.setScale(1.5);
+                    this.moveMarker.setAlpha(1);
+                    this.tweens.add({ targets: this.moveMarker, scale: 0.5, duration: 300, ease: 'Back.easeOut' });
+                } else if (this.controlMode === 'joystick') {
+                    this.isJoyActive = true;
+                    this.joyOrigin.set(pointer.x, pointer.y);
+                    this.joyStickBase.setPosition(pointer.x, pointer.y).setVisible(true);
+                    this.joyStickThumb.setPosition(pointer.x, pointer.y).setVisible(true);
+                }
+            });
+
+            this.input.on('pointermove', (pointer) => {
+                if (this.isPaused) return;
+                
+                if (this.controlMode === 'joystick' && this.isJoyActive) {
+                    const dist = Phaser.Math.Distance.Between(this.joyOrigin.x, this.joyOrigin.y, pointer.x, pointer.y);
+                    const angle = Phaser.Math.Angle.Between(this.joyOrigin.x, this.joyOrigin.y, pointer.x, pointer.y);
+                    const maxDist = CONFIG.JOYSTICK_RADIUS;
+                    const clampDist = Math.min(dist, maxDist);
+                    
+                    this.joyStickThumb.x = this.joyOrigin.x + Math.cos(angle) * clampDist;
+                    this.joyStickThumb.y = this.joyOrigin.y + Math.sin(angle) * clampDist;
+                    
+                    this.joyVector.set(Math.cos(angle), Math.sin(angle));
+                    if (dist < 10) this.joyVector.set(0, 0); 
+                    else {
+                        const force = clampDist / maxDist;
+                        this.joyVector.scale(Math.max(0.2, force));
+                    }
+                }
+            });
+
+            this.input.on('pointerup', () => {
+                if (this.controlMode === 'joystick') {
+                    this.isJoyActive = false;
+                    this.joyStickBase.setVisible(false);
+                    this.joyStickThumb.setVisible(false);
+                    this.joyVector.set(0, 0);
+                    this.player.setVelocity(0); 
+                }
+            });
+            
+            this.spawnEvent = this.time.addEvent({ delay: CONFIG.SPAWN_RATE_INITIAL, callback: this.spawnEnemy, callbackScope: this, loop: true, startAt: 500 });
+            
+            this.matter.world.on('collisionstart', (event) => {
+                event.pairs.forEach(pair => {
+                    const { bodyA, bodyB } = pair;
+                    this.checkCollision(bodyA, bodyB, 'die', 'enemy', (d, e) => this.handleDieHit(d, e));
+                    this.checkCollision(bodyA, bodyB, 'player', 'enemy', (p, e) => {
+                        const dmg = (e.enemyType === 'elite') ? CONFIG.ENEMY_DAMAGE_ELITE : CONFIG.ENEMY_DAMAGE_CONTACT;
+                        this.handlePlayerHit(dmg);
+                    });
+                    this.checkCollision(bodyA, bodyB, 'player', 'bullet', (p, b) => {
+                        this.handlePlayerHit(CONFIG.ENEMY_DAMAGE_BULLET);
+                        if(b && b.active) b.destroy();
+                    });
+                    this.checkCollision(bodyA, bodyB, 'player', 'item', (p, i) => {
+                        this.healPlayer(25);
+                        if(i && i.active) i.destroy();
+                    });
+                    this.checkCollision(bodyA, bodyB, 'die', 'bullet', (d, b) => {
+                        if(b && b.active) {
+                            const spark = this.add.circle(b.x, b.y, 3, 0xffaa00);
+                            this.tweens.add({targets: spark, alpha: 0, duration: 200, onComplete: ()=>spark.destroy()});
+                            b.destroy(); 
+                        }
+                    });
+                });
+            });
+
+            this.isPaused = false;
+            this.updateUI();
+        }
+
+        setControlMode(mode) {
+            this.controlMode = mode;
+            this.moveTarget = null;
+            this.moveMarker.setVisible(false);
+            this.isJoyActive = false;
+            this.joyStickBase.setVisible(false);
+            this.joyStickThumb.setVisible(false);
+            this.joyVector.set(0, 0);
+        }
+
+        update(time, delta) {
+            if (this.isPaused) return;
+            this.stats.timeAlive += delta;
+
+            if (time > this.nextAttackTime) {
+                this.fireDice();
+                this.nextAttackTime = time + this.build.cooldown;
+            }
+
+            if (this.controlMode === 'click' && this.moveTarget) {
+                const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, this.moveTarget.x, this.moveTarget.y);
+                if (dist > 10) {
+                    this.moveTo(this.player, this.moveTarget.x, this.moveTarget.y, CONFIG.PLAYER_SPEED);
+                } else {
+                    this.player.setVelocity(0);
+                    this.moveTarget = null;
+                    this.tweens.add({targets: this.moveMarker, alpha: 0, duration: 200});
+                }
+            } else if (this.controlMode === 'joystick' && this.isJoyActive) {
+                this.player.setVelocity(this.joyVector.x * CONFIG.PLAYER_SPEED, this.joyVector.y * CONFIG.PLAYER_SPEED);
+            }
+
+            this.enemies.forEach(enemy => {
+                if (!enemy.active || !enemy.body) return;
+                const dist = Phaser.Math.Distance.Between(enemy.x, enemy.y, this.player.x, this.player.y);
+                const angle = Phaser.Math.Angle.Between(enemy.x, enemy.y, this.player.x, this.player.y);
+
+                let moveSpeed = 0;
+                if (enemy.enemyType === 'shooter') {
+                    moveSpeed = CONFIG.ENEMY_SHOOTER_SPEED;
+                    if (dist > CONFIG.SHOOTER_RANGE) {
+                         this.matter.body.setVelocity(enemy.body, { x: Math.cos(angle) * moveSpeed, y: Math.sin(angle) * moveSpeed });
+                    } else { enemy.setFrictionAir(0.2); }
+                    
+                    if (time > enemy.nextShotTime) {
+                        this.enemyFire(enemy);
+                        enemy.nextShotTime = time + CONFIG.SHOOTER_COOLDOWN + Phaser.Math.Between(-200, 200);
+                    }
+                } else if (enemy.enemyType === 'elite') {
+                    moveSpeed = CONFIG.ENEMY_ELITE_SPEED;
+                    if (enemy.body.speed < 3) { 
+                         this.matter.body.setVelocity(enemy.body, { x: Math.cos(angle) * moveSpeed, y: Math.sin(angle) * moveSpeed });
+                    }
+                } else {
+                    moveSpeed = CONFIG.ENEMY_CHASER_SPEED;
+                    if (enemy.body.speed < 4) {
+                        this.matter.body.setVelocity(enemy.body, { x: Math.cos(angle) * moveSpeed, y: Math.sin(angle) * moveSpeed });
+                    }
+                }
+                enemy.rotation = angle; 
+            });
+
+            for (let i = this.dice.length - 1; i >= 0; i--) {
+                const die = this.dice[i];
+                if (!die.active) { this.dice.splice(i, 1); continue; }
+                die.lifeTime++;
+                if (die.body.speed > 1.0) {
+                    if (time % 4 < 1) { 
+                        const rnd = Phaser.Math.Between(1, 6);
+                        die.setTexture(`die_${die.dieSizeKey}_${rnd}`);
+                    }
+                }
+                if (die.lifeTime > 10 && die.body.speed < 0.6) this.resolveDie(die, i);
+            }
+
+            for (let i = this.bullets.length - 1; i >= 0; i--) {
+                const b = this.bullets[i];
+                if (!b.active) { this.bullets.splice(i, 1); continue; }
+                if (b.x < 0 || b.x > CONFIG.WORLD_WIDTH || b.y < 0 || b.y > CONFIG.WORLD_HEIGHT) {
+                    b.destroy();
+                    this.bullets.splice(i, 1);
+                }
+            }
+        }
+
+        checkCollision(bodyA, bodyB, labelA, labelB, callback) {
+            if (bodyA.label === labelA && bodyB.label === labelB) callback(bodyA.gameObject, bodyB.gameObject);
+            else if (bodyB.label === labelA && bodyA.label === labelB) callback(bodyB.gameObject, bodyA.gameObject);
+        }
+
+        moveTo(obj, x, y, speed) {
+            const angle = Phaser.Math.Angle.Between(obj.x, obj.y, x, y);
+            obj.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+        }
+
+        spawnEnemy() {
+            if (this.isPaused) return;
+            const cam = this.cameras.main;
+            if (!cam.worldView || cam.worldView.width <= 0) return; 
+            
+            // 精英怪数量限制逻辑
+            const eliteCount = this.enemies.filter(e => e.active && e.enemyType === 'elite').length;
+            const eliteCap = 1 + Math.floor(this.stats.level / 5);
+
+            const rand = Math.random();
+            let type, label, hp, density, friction;
+
+            if (rand < 0.05 && eliteCount < eliteCap) { // 限制精英怪数量
+                type = 'enemy_elite';
+                label = 'elite';
+                hp = CONFIG.ENEMY_HP_ELITE;
+                density = 0.5; 
+                friction = 0.2; 
+            } else if (rand < 0.25) {
+                type = 'enemy_shooter';
+                label = 'shooter';
+                hp = CONFIG.ENEMY_HP_NORMAL;
+                density = 0.01;
+                friction = 0.05;
+            } else {
+                type = 'enemy_chaser';
+                label = 'chaser';
+                hp = CONFIG.ENEMY_HP_NORMAL;
+                density = 0.01;
+                friction = 0.05;
+            }
+
+            const padding = 150;
+            const side = Phaser.Math.Between(0, 3);
+            let x, y;
+            try {
+                switch(side) {
+                    case 0: x = Phaser.Math.Between(cam.worldView.x, cam.worldView.right); y = cam.worldView.y - padding; break;
+                    case 1: x = cam.worldView.right + padding; y = Phaser.Math.Between(cam.worldView.y, cam.worldView.bottom); break;
+                    case 2: x = Phaser.Math.Between(cam.worldView.x, cam.worldView.right); y = cam.worldView.bottom + padding; break;
+                    case 3: x = cam.worldView.x - padding; y = Phaser.Math.Between(cam.worldView.y, cam.worldView.bottom); break;
+                }
+                if (isNaN(x)) x = CONFIG.WORLD_WIDTH / 2;
+                if (isNaN(y)) y = CONFIG.WORLD_HEIGHT / 2;
+                x = Phaser.Math.Clamp(x, 100, CONFIG.WORLD_WIDTH - 100);
+                y = Phaser.Math.Clamp(y, 100, CONFIG.WORLD_HEIGHT - 100);
+
+                const enemy = this.matter.add.sprite(x, y, type);
+                enemy.body.label = 'enemy';
+                enemy.enemyType = label;
+                enemy.hp = hp;
+                enemy.maxHp = hp;
+                enemy.nextShotTime = this.time.now + 1000;
+                enemy.setCollisionCategory(this.catEnemy);
+                enemy.setCollidesWith([this.catPlayer, this.catDie, this.catEnemy]); 
+                enemy.setDensity(density); 
+                enemy.setFrictionAir(friction);
+                this.enemies.push(enemy);
+            } catch (e) { console.log("Spawn init skip"); }
+        }
+
+        enemyFire(enemy) {
+            if (!enemy.active || this.isPaused) return;
+            const angle = Phaser.Math.Angle.Between(enemy.x, enemy.y, this.player.x, this.player.y);
+            const speed = CONFIG.BULLET_SPEED;
+            const spawnX = enemy.x + Math.cos(angle) * 20;
+            const spawnY = enemy.y + Math.sin(angle) * 20;
+
+            const bullet = this.matter.add.sprite(spawnX, spawnY, 'bullet');
+            bullet.body.label = 'bullet';
+            bullet.setCollisionCategory(this.catBullet);
+            bullet.setCollidesWith([this.catPlayer, this.catDie]);
+            bullet.setFrictionAir(0); 
+            bullet.setIgnoreGravity(true);
+            this.matter.body.setVelocity(bullet.body, { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed });
+            this.bullets.push(bullet);
+        }
+
+        handlePlayerHit(damage) {
+            const now = this.time.now;
+            if (now - this.lastHitTime < CONFIG.PLAYER_INVINCIBLE_TIME) return; 
+            this.lastHitTime = now;
+            this.stats.hp -= damage;
+            this.updateUI();
+            this.cameras.main.shake(80, 0.01);
+            this.player.setTint(0xff0000);
+            this.time.delayedCall(150, () => this.player.clearTint());
+            this.tweens.add({ targets: this.player, alpha: 0.3, duration: 50, yoyo: true, repeat: 3 });
+            if (this.stats.hp <= 0) this.gameOver();
+        }
+
+        healPlayer(amount) {
+            this.stats.hp = Math.min(this.stats.maxHp, this.stats.hp + amount);
+            this.updateUI();
+            const txt = this.add.text(this.player.x, this.player.y - 30, "+" + amount, {color:'#0f0', fontSize: '24px', fontStyle: 'bold'}).setOrigin(0.5);
+            this.tweens.add({targets: txt, y: txt.y-50, alpha: 0, duration: 800, onComplete: ()=>txt.destroy()});
+        }
+
+        handleDieHit(die, enemy) {
+            if (die.body.speed > 3 && enemy && enemy.active) {
+                this.damageEnemy(enemy, 2); 
+            }
+        }
+
+        fireDice() {
+            let target = null; let minDist = 100000; 
+            this.enemies.forEach(e => {
+                if (!e.active) return;
+                const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, e.x, e.y);
+                if (d < minDist) { minDist = d; target = e; }
+            });
+            let baseAngle = 0;
+            if (target && minDist < 800) { 
+                baseAngle = Phaser.Math.Angle.Between(this.player.x, this.player.y, target.x, target.y);
+            } else {
+                const vel = this.player.body.velocity;
+                if (Math.abs(vel.x) > 0.1 || Math.abs(vel.y) > 0.1) {
+                    baseAngle = Math.atan2(vel.y, vel.x);
+                } else {
+                    baseAngle = Math.random() * Math.PI * 2;
+                }
+            }
+            const count = this.build.dieCount;
+            const spread = 15 * (Math.PI / 180);
+            const startAngle = baseAngle - ((count - 1) * spread) / 2;
+            for (let i = 0; i < count; i++) {
+                const angle = startAngle + i * spread;
+                this.time.delayedCall(i * 60, () => this.spawnDie(angle));
+            }
+        }
+
+        spawnDie(angle) {
+            if(this.isPaused) return;
+            const size = CONFIG.BASE_DIE_SIZE * this.build.dieSize;
+            this.generateDieTextures(size);
+            const startFace = Phaser.Math.Between(1, 6);
+            const key = `die_${size}_${startFace}`; 
+
+            const die = this.matter.add.sprite(this.player.x, this.player.y, key);
+            die.body.label = 'die';
+            die.dieSizeKey = size; 
+            die.setCollisionCategory(this.catDie);
+            die.setCollidesWith([this.catEnemy, this.catBullet, this.matter.world.localWorld.bounds]); 
+            die.setDensity(CONFIG.BASE_DIE_DENSITY * this.build.dieSize); 
+            die.setFrictionAir(this.build.dieFriction); 
+            die.setBounce(0.6); 
+            
+            const speed = CONFIG.BASE_DIE_SPEED * this.build.dieSpeed;
+            
+            this.matter.body.setVelocity(die.body, { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed });
+            this.matter.body.setAngularVelocity(die.body, Phaser.Math.FloatBetween(-0.3, 0.3));
+            die.lifeTime = 0;
+            this.dice.push(die);
+        }
+
+        resolveDie(die, index) {
+            const roll = Phaser.Math.Between(1, 6);
+            const isCrit = roll === 6;
+            die.setTexture(`die_${die.dieSizeKey}_${roll}`);
+
+            const boomColor = isCrit ? 0xffd700 : 0xffffff;
+            const boomRadius = this.build.blastRadius * (isCrit ? 2.5 : 1);
+            const boomDamage = isCrit ? 20 : 10;
+
+            const boom = this.add.circle(die.x, die.y, 10, boomColor, 0.7);
+            this.tweens.add({ targets: boom, scale: boomRadius/10, alpha: 0, duration: 300, onComplete: () => boom.destroy() });
+            
+            const text = this.add.text(die.x, die.y, roll.toString(), { fontSize: isCrit ? '40px' : '20px', color: isCrit ? '#ff0' : '#fff', fontStyle: 'bold' }).setOrigin(0.5);
+            this.tweens.add({ targets: text, y: die.y - 40, alpha: 0, duration: 600, onComplete: () => text.destroy() });
+            
+            const bodies = this.matter.world.getAllBodies();
+            bodies.forEach(body => {
+                if (body.label === 'enemy' && body.gameObject && body.gameObject.active) {
+                    const dist = Phaser.Math.Distance.Between(die.x, die.y, body.position.x, body.position.y);
+                    if (dist < boomRadius) {
+                        const angle = Phaser.Math.Angle.Between(die.x, die.y, body.position.x, body.position.y);
+                        
+                        // 改动：爆炸推力与骰子尺寸(build.dieSize)挂钩，大骰子推力更强
+                        let force = (isCrit ? 0.25 : 0.08) * this.build.dieSize;
+                        
+                        // 对精英怪的推力惩罚减少
+                        if (body.gameObject.enemyType === 'elite') {
+                            force = force * 0.15; 
+                        }
+                        
+                        this.matter.body.applyForce(body, body.position, { x: Math.cos(angle)*force, y: Math.sin(angle)*force });
+                        this.damageEnemy(body.gameObject, boomDamage);
+                    }
+                }
+            });
+            if (isCrit) this.cameras.main.flash(50, 255, 255, 200);
+            die.destroy();
+            this.dice.splice(index, 1);
+        }
+
+        damageEnemy(enemy, amt) {
+            enemy.hp -= amt;
+            // 修复：使用 setTintFill 来实现纯白闪光，增强打击反馈
+            enemy.setTintFill(0xffffff);
+            this.time.delayedCall(80, () => {
+                if(enemy.active) enemy.clearTint();
+            });
+            if (enemy.hp <= 0) {
+                this.killEnemy(enemy);
+            }
+        }
+
+        killEnemy(enemy) {
+            if(!enemy.active) return;
+            
+            if (enemy.enemyType === 'elite') {
+                const item = this.matter.add.sprite(enemy.x, enemy.y, 'hp_pack');
+                item.body.label = 'item';
+                item.setCollisionCategory(this.catItem);
+                item.setCollidesWith([this.catPlayer, this.matter.world.localWorld.bounds]);
+                item.setFrictionAir(0.1);
+            }
+
+            enemy.destroy();
+            this.enemies = this.enemies.filter(e => e !== enemy);
+            this.stats.kills++;
+            const xp = (enemy.enemyType === 'elite') ? 20 : 1;
+            this.gainXP(xp);
+            this.updateUI();
+        }
+
+        gainXP(amt) {
+            this.stats.xp += amt;
+            if (this.stats.xp >= this.stats.xpNext) this.levelUp();
+            this.updateUI();
+        }
+
+        updateUI() {
+            const hpPct = Math.max(0, (this.stats.hp / this.stats.maxHp) * 100);
+            document.getElementById('hp-bar-fill').style.width = `${hpPct}%`;
+            document.getElementById('hp-text').innerText = `HP: ${this.stats.hp} / ${this.stats.maxHp}`;
+            const xpPct = Math.min(100, (this.stats.xp / this.stats.xpNext) * 100);
+            document.getElementById('xp-bar-fill').style.width = `${xpPct}%`;
+            document.getElementById('level-text').innerText = this.stats.level;
+            document.getElementById('kill-count').innerText = `☠️ ${this.stats.kills}`;
+        }
+
+        levelUp() {
+            this.isPaused = true;
+            this.matter.pause();
+            const pool = [
+                { title: "多重投射", type: "火力", desc: "骰子数量 +1\n增加弹幕密度", action: () => this.build.dieCount++ },
+                { title: "重型材质", type: "物理", desc: "体积 +25%\n大幅增加击退", action: () => this.build.dieSize *= 1.25 },
+                { title: "强力弹簧", type: "速度", desc: "弹道速度 +15%\n让骰子飞得更快", action: () => this.build.dieSpeed *= 1.15 },
+                { title: "工业润滑", type: "射程", desc: "摩擦力 -25%\n骰子滚得更远", action: () => this.build.dieFriction *= 0.75 },
+                { title: "快速装填", type: "射速", desc: "攻击间隔 -15%\n加快攻击频率", action: () => this.build.cooldown *= 0.85 },
+                { title: "高爆火药", type: "范围", desc: "爆炸范围 +10%\n增长幅度平缓", action: () => this.build.blastRadius *= 1.1 }
+            ];
+            const choices = Phaser.Utils.Array.Shuffle(pool).slice(0, 3);
+            const container = document.getElementById('card-container');
+            container.innerHTML = '';
+            choices.forEach(c => {
+                const div = document.createElement('div');
+                div.className = 'card';
+                div.innerHTML = `<div><h3>${c.title}</h3><span class="type">${c.type}</span></div><p>${c.desc.replace(/\n/g,'<br>')}</p><div>👆 选择</div>`;
+                div.onclick = () => { c.action(); this.closeLevelUp(); };
+                container.appendChild(div);
+            });
+            document.getElementById('upgrade-panel').style.display = 'flex';
+        }
+
+        closeLevelUp() {
+            document.getElementById('upgrade-panel').style.display = 'none';
+            this.stats.level++;
+            this.stats.xp = 0;
+            // 改动：升级曲线平滑化，改为线性+小幅乘算，防止后期升级太难
+            this.stats.xpNext = Math.floor(this.stats.xpNext * 1.15) + 10;
+            
+            // 改动：刷怪间隔随等级线性加快，设定下限
+            let newDelay = CONFIG.SPAWN_RATE_INITIAL - (this.stats.level * 50);
+            this.spawnEvent.delay = Math.max(CONFIG.SPAWN_RATE_MIN, newDelay);
+            
+            this.matter.resume();
+            this.isPaused = false;
+            this.updateUI();
+        }
+
+        gameOver() {
+            this.isPaused = true;
+            this.matter.pause();
+            document.getElementById('game-over-panel').style.display = 'flex';
+            document.getElementById('end-time').innerText = (this.stats.timeAlive / 1000).toFixed(1) + 's';
+            document.getElementById('end-kills').innerText = this.stats.kills;
+        }
+    }
+
+    function restartGame() {
+        document.getElementById('game-over-panel').style.display = 'none';
+        gameInstance.scene.start('MainScene');
+    }
+
+    const config = {
+        type: Phaser.AUTO,
+        width: window.innerWidth,
+        height: window.innerHeight,
+        backgroundColor: '#000',
+        physics: { default: 'matter', matter: { gravity: { y: 0 } } },
+        scene: MainScene
+    };
+
+    gameInstance = new Phaser.Game(config);
+    window.addEventListener('resize', () => gameInstance.scale.resize(window.innerWidth, window.innerHeight));
+
+    </script>
+</body>
+</html>
