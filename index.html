@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>绝境骰子 - V7.6 终极爆破版</title>
+    <title>绝境骰子 - V7.6.1 稳定修复版</title>
     <style>
         body { margin: 0; padding: 0; background-color: #000; overflow: hidden; font-family: 'Segoe UI', sans-serif; user-select: none; -webkit-user-select: none; touch-action: none; color: white;}
         
@@ -57,7 +57,7 @@
 
     <div id="screen-start" class="overlay">
         <h1 style="font-size: 40px; color: #ffcc00; margin:0;">PROJECT<br>DICE SURVIVOR</h1>
-        <p style="color:#888; letter-spacing: 2px;">V7.6 终极爆破版</p>
+        <p style="color:#888; letter-spacing: 2px;">V7.6.1 稳定修复版</p>
         <p style="color:#fff;">历史最高: <span id="best-score">0</span></p>
         <button class="btn-start" onclick="gameStart()">DEPLOY</button>
     </div>
@@ -533,21 +533,22 @@
 
         explodeDie(d) {
             if(!d.active) return;
+            
+            // 1. 缓存关键数据，防止d销毁后报错
+            const ex = d.x;
+            const ey = d.y;
+            const point = d.finalPoint;
+
+            // 销毁物理实体，但保留视觉位置用于特效
             d.setCollisionCategory(0); 
             d.setVelocity(0,0);
             d.setStatic(true); 
-            d.setRotation(0);
-            d.setTexture(`die_${d.finalPoint}`);
-            
-            const point = d.finalPoint;
-            
-            // V7.6 核心改动：指数级半径 & 倍率伤害
-            // 半径映射: 1->0.5, 2->0.8, 3->1.2, 4->1.8, 5->2.5, 6->3.5 (巨型)
+            d.setVisible(false);
+
+            // 参数计算
             const radMap = [0.5, 0.8, 1.2, 1.8, 2.5, 3.5]; 
             const radiusCoef = radMap[point-1];
             const radius = this.build.radius * radiusCoef; 
-
-            // 伤害公式：基础 * 点数
             let dmg = this.build.impactDmg * point * this.build.explodeDmgMult;
             
             // 视觉分级
@@ -556,64 +557,64 @@
             if (point <= 2) { color = 0xdddddd; shake = 0.005; }
             else if (point <= 4) { color = 0xffaa00; shake = 0.015; }
             else if (point === 5) { color = 0xff0000; shake = 0.025; }
-            else { color = 0x00ffff; shake = 0.05; dmg *= 1.5; } // 6点额外伤害
+            else { color = 0x00ffff; shake = 0.05; dmg *= 1.5; } 
 
             this.cameras.main.shake(200, shake);
-            this.showDmg(d.x, d.y - 25, point, point===6 ? '#0ff' : '#fff', point===6 ? 40 : 24);
+            this.showDmg(ex, ey - 25, point, point===6 ? '#0ff' : '#fff', point===6 ? 40 : 24);
 
-            // 强化版 VFX：双层圆圈
-            // 1. 冲击波环
+            // VFX
             const shockwave = this.add.graphics();
-            shockwave.lineStyle(point === 6 ? 10 : 4, color, 1);
-            shockwave.strokeCircle(d.x, d.y, 10);
             this.tweens.add({
                 targets: shockwave,
-                scaleX: radius/10, scaleY: radius/10, // 放大到实际半径
-                alpha: 0,
-                duration: 300,
+                scaleX: radius/10, scaleY: radius/10, 
+                alpha: 0, duration: 300,
                 onUpdate: () => { 
                     shockwave.clear(); 
                     shockwave.lineStyle(point === 6 ? 10 : 4, color, shockwave.alpha);
-                    shockwave.strokeCircle(d.x, d.y, 10); 
+                    shockwave.strokeCircle(ex, ey, 10); // 使用缓存坐标ex, ey
                 },
                 onComplete: () => shockwave.destroy()
             });
 
-            // 2. 核心闪光
-            const flash = this.add.circle(d.x, d.y, radius * 0.2, color, 0.8);
+            const flash = this.add.circle(ex, ey, radius * 0.2, color, 0.8);
             this.tweens.add({targets: flash, scale: 3, alpha: 0, duration: 250, onComplete:()=>flash.destroy()});
 
+            // 2. 使用快照列表来遍历敌人，避免数组在循环中被修改导致crash
+            const activeEnemies = [...this.enemies]; 
 
+            // 激光逻辑
             if (point % 2 === 0) {
                 let nearest = null; let minD = 600; 
-                this.enemies.forEach(e => {
+                activeEnemies.forEach(e => {
                     if (!e.active) return;
-                    const dist = Phaser.Math.Distance.Between(d.x, d.y, e.x, e.y);
+                    const dist = Phaser.Math.Distance.Between(ex, ey, e.x, e.y);
                     if (dist < minD) { minD = dist; nearest = e; }
                 });
                 if (nearest) {
                     const laser = this.add.graphics();
                     laser.lineStyle(point * 2, 0x00ffff, 1); 
-                    laser.lineBetween(d.x, d.y, nearest.x, nearest.y);
+                    laser.lineBetween(ex, ey, nearest.x, nearest.y);
                     this.tweens.add({targets: laser, alpha: 0, duration: 300, onComplete: ()=>laser.destroy()}); 
                     this.hitEnemy(nearest, dmg * 1.5 * this.build.laserDmgMult);
                 }
             }
 
+            // 冰冻逻辑
             let freezeSuccess = false;
             if (point % 2 !== 0 && Math.random() < this.build.freezeChance) freezeSuccess = true;
 
-            for(let i = this.enemies.length - 1; i >= 0; i--) {
-                const e = this.enemies[i];
-                if(!e.active) continue;
-                const dist = Phaser.Math.Distance.Between(d.x, d.y, e.x, e.y);
+            // 3. 爆炸范围逻辑
+            activeEnemies.forEach(e => {
+                if(!e.active) return;
+                const dist = Phaser.Math.Distance.Between(ex, ey, e.x, e.y);
                 if(dist <= radius) {
-                    const angle = Phaser.Math.Angle.Between(d.x, d.y, e.x, e.y);
-                    const force = 0.1 * this.build.size * (point/3); // 爆炸推力也随点数增加
+                    const angle = Phaser.Math.Angle.Between(ex, ey, e.x, e.y);
+                    const force = 0.1 * this.build.size * (point/3); 
                     e.applyForce({x:Math.cos(angle)*force, y:Math.sin(angle)*force});
+                    
                     this.hitEnemy(e, dmg);
                     
-                    if (freezeSuccess) {
+                    if (freezeSuccess && e.active) { // 检查e.active，因为可能上一行hitEnemy已经把它杀了
                         e.setData('frozen', true);
                         e.setTint(0x00aaff); 
                         this.time.delayedCall(2000, () => {
@@ -624,9 +625,9 @@
                         });
                     }
                 }
-            }
+            });
             
-            this.time.delayedCall(250, () => { if(d.active) d.destroy(); });
+            this.time.delayedCall(50, () => { if(d.active) d.destroy(); });
         }
 
         showDmg(x, y, dmg, color, size=16) {
@@ -635,6 +636,7 @@
         }
 
         hitEnemy(e, dmg) {
+            if (!e.active) return;
             let hp = e.getData('hp');
             hp -= dmg;
             e.setData('hp', hp);
@@ -653,7 +655,8 @@
                 }
                 this.dataState.kills++;
                 e.destroy();
-                this.enemies = this.enemies.filter(obj => obj !== e);
+                // 安全移除：不要在这里使用filter重赋值整个数组，而是使用移除工具
+                Phaser.Utils.Array.Remove(this.enemies, e);
                 this.updateUI();
             }
         }
